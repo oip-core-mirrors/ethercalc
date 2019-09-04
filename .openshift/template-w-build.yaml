@@ -1,0 +1,390 @@
+apiVersion: v1
+kind: Template
+labels:
+  template: EtherCalc
+message: |-
+  The following service(s) have been created in your project:
+    - an EtherCalc application pod
+        Connection URL: https://<to be documented>
+    - a ${DATABASE_SERVICE_NAME} backend to store data
+        Connection URL: redis://${DATABASE_SERVICE_NAME}:6379/ (not exposed outside the cluster)
+             Password: ${REDIS_PASSWORD}
+
+  For more information about using this template, including OpenShift considerations, see https://github.com/societe-generale/cloud-innovation-platform.git.
+metadata:
+  annotations:
+    description: |-
+      EtherCalc is a web spreadsheet.
+
+      Your data is saved on the web, and people can edit the same document at the same time. Everybody's changes are instantly reflected on all screens.
+      Work together on inventories, survey forms, list management, brainstorming sessions and more!
+
+      Data are stored in Redis in-memory data structure store, with persistent storage.
+
+      For more information about using this template, including OpenShift considerations, see https://github.com/societe-generale/cloud-innovation-platform.git.
+
+      NOTE: You must have persistent volumes available in your cluster to use this template.
+    iconClass: icon-redis
+    openshift.io/display-name: EtherCalc
+    openshift.io/documentation-url: https://ethercalc.net/
+    openshift.io/long-description: This template provides an EtherCalc web spreadsheet backed by a standalone Redis server.
+      The data are stored on persistent storage.
+    openshift.io/provider-display-name: Societe Generale, Cloud Innovation Platform team
+    openshift.io/support-url: https://github.com/societe-generale/cloud-innovation-platform.git
+    tags: database,spreadsheet,redis,cip
+  name: ethercalc
+objects:
+
+#--- EtherCalc ----------------------------------
+- apiVersion: v1
+  kind: ImageStream
+  metadata:
+    labels:
+      app: ethercalc-${DEPL_ID}
+    name: ethercalc-${DEPL_ID}
+  spec:
+    lookupPolicy:
+      local: false
+
+- apiVersion: v1
+  kind: BuildConfig
+  metadata:
+    labels:
+      app: 'ethercalc-${DEPL_ID}'
+      name: 'ethercalc-${DEPL_ID}'
+    name: ethercalc-${DEPL_ID}
+  spec:
+    nodeSelector: null
+    output:
+      to:
+        kind: ImageStreamTag
+        name: ethercalc-${DEPL_ID}:latest
+    postCommit: {}
+    resources: {}
+    runPolicy: Serial
+    source:
+      type: "Git"
+      git:
+        uri: ${GIT_REPO}
+        ref: ${GIT_REPO_REF}
+    strategy:
+      dockerStrategy:
+        env:
+          - name: "NPM_CONFIG_STRICT_SSL"
+            value: "${NPM_CONFIG_STRICT_SSL}"
+          - name: "NPM_MIRROR"
+            value: "${NPM_MIRROR}"
+          - name: "SASS_BINARY_SITE"
+            value: "${SASS_BINARY_SITE}"
+        dockerfilePath: .openshift/Dockerfile
+        from:
+          kind: DockerImage
+          name: 'docker-registry.default.svc:5000/openshift/nodejs:10'
+
+      type: Docker
+    triggers:
+    - type: ConfigChange
+    - type: ImageChange
+      imageChange:
+        from:
+          kind: "ImageStreamTag"
+          name: 'docker-registry.default.svc:5000/openshift/nodejs:10'
+
+- apiVersion: v1
+  kind: Service
+  metadata:
+    labels:
+      app: ethercalc-${DEPL_ID}
+    name: ethercalc-${DEPL_ID}
+  spec:
+    ports:
+      - name: 8000-tcp
+        port: 8000
+        protocol: TCP
+        targetPort: 8000
+    selector:
+      app: ethercalc-${DEPL_ID}
+      deploymentconfig: ethercalc-${DEPL_ID}
+    sessionAffinity: None
+    type: ClusterIP
+
+- apiVersion: v1
+  kind: Route
+  metadata:
+    annotations:
+      kubernetes.io/tls-acme: 'true'
+    labels:
+      app: ethercalc-${DEPL_ID}
+    name: ethercalc-${DEPL_ID}
+  spec:
+    port:
+      targetPort: 8000-tcp
+    to:
+      kind: Service
+      name: 'ethercalc-${DEPL_ID}'
+      weight: 100
+    wildcardPolicy: None
+
+
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    annotations:
+      template.alpha.openshift.io/wait-for-ready: "true"
+    labels:
+      app: ethercalc-${DEPL_ID}
+      deploymentconfig: ethercalc-${DEPL_ID}
+    name: ethercalc-${DEPL_ID}
+  spec:
+    replicas: 1
+    selector:
+      name: ethercalc-${DEPL_ID}
+    strategy:
+      type: Recreate
+    template:
+      metadata:
+        labels:
+          app: ethercalc-${DEPL_ID}
+          deploymentconfig: ethercalc-${DEPL_ID}
+          name: ethercalc-${DEPL_ID}
+      spec:
+        containers:
+        - capabilities: {}
+          env:
+          - name: DEPL_ID
+            value: ${DEPL_ID}
+          - name: REDIS_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: database-password
+                name: ${DATABASE_SERVICE_NAME}-${DEPL_ID}
+          image: ' '
+          imagePullPolicy: IfNotPresent
+          livenessProbe:
+            initialDelaySeconds: 30
+            tcpSocket:
+              port: 8000
+            timeoutSeconds: 1
+          name: ethercalc
+          ports:
+          - containerPort: 8000
+            protocol: TCP
+          readinessProbe:
+            exec:
+              command:
+              - /bin/sh
+              - -i
+              - -c
+              - test "$(/opt/app-root/src/node_modules/.bin/rdcli -h $(eval echo \$REDIS_${DEPL_ID^^}_SERVICE_HOST) -p $(eval echo \$REDIS_${DEPL_ID^^}_SERVICE_PORT) -a $REDIS_PASSWORD ping)" == "$(eval echo \$REDIS_${DEPL_ID^^}_SERVICE_HOST):$(eval echo \$REDIS_${DEPL_ID^^}_SERVICE_PORT)> PONG"
+            initialDelaySeconds: 5
+            timeoutSeconds: 1
+          resources:
+            limits:
+              memory: ${ETHERCALC_MEMORY_LIMIT}
+          securityContext:
+            capabilities: {}
+            privileged: false
+          terminationMessagePath: /dev/termination-log
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+    triggers:
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - ethercalc
+        from:
+          kind: ImageStreamTag
+          name: ethercalc-${DEPL_ID}:latest
+        lastTriggeredImage: ""
+      type: ImageChange
+    - type: ConfigChange
+
+#--- Redis --------------------------------------
+- apiVersion: v1
+  kind: Secret
+  metadata:
+    annotations:
+      template.openshift.io/expose-password: '{.data[''database-password'']}'
+    labels:
+      app: ethercalc-${DEPL_ID}
+    name: ${DATABASE_SERVICE_NAME}-${DEPL_ID}
+  stringData:
+    database-password: redis-${REDIS_PASSWORD}-${DEPL_ID}
+- apiVersion: v1
+  kind: Service
+  metadata:
+    annotations:
+      template.openshift.io/expose-uri: redis://{.spec.clusterIP}:{.spec.ports[?(.name=="redis")].port}
+    labels:
+      app: ethercalc-${DEPL_ID}
+    name: ${DATABASE_SERVICE_NAME}-${DEPL_ID}
+  spec:
+    ports:
+    - name: redis
+      nodePort: 0
+      port: 6379
+      protocol: TCP
+      targetPort: 6379
+    selector:
+      name: ${DATABASE_SERVICE_NAME}-${DEPL_ID}
+    sessionAffinity: None
+    type: ClusterIP
+  status:
+    loadBalancer: {}
+- apiVersion: v1
+  kind: PersistentVolumeClaim
+  metadata:
+    labels:
+      app: ethercalc-${DEPL_ID}
+    name: ${DATABASE_SERVICE_NAME}-${DEPL_ID}
+  spec:
+    accessModes:
+    - ReadWriteOnce
+    resources:
+      requests:
+        storage: ${REDIS_VOLUME_CAPACITY}
+
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    annotations:
+      template.alpha.openshift.io/wait-for-ready: "true"
+    labels:
+      app: ethercalc-${DEPL_ID}
+    name: '${DATABASE_SERVICE_NAME}-${DEPL_ID}'
+  spec:
+    replicas: 1
+    selector:
+      name: '${DATABASE_SERVICE_NAME}-${DEPL_ID}'
+    strategy:
+      type: Recreate
+    template:
+      metadata:
+        labels:
+          name: '${DATABASE_SERVICE_NAME}-${DEPL_ID}'
+      spec:
+        containers:
+        - capabilities: {}
+          env:
+          - name: REDIS_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: database-password
+                name: '${DATABASE_SERVICE_NAME}-${DEPL_ID}'
+          image: ' '
+          imagePullPolicy: IfNotPresent
+          livenessProbe:
+            initialDelaySeconds: 30
+            tcpSocket:
+              port: 6379
+            timeoutSeconds: 1
+          name: redis
+          ports:
+          - containerPort: 6379
+            protocol: TCP
+          readinessProbe:
+            exec:
+              command:
+              - /bin/sh
+              - -i
+              - -c
+              - test "$(redis-cli -h 127.0.0.1 -a $REDIS_PASSWORD ping)" == "PONG"
+            initialDelaySeconds: 5
+            timeoutSeconds: 1
+          resources:
+            limits:
+              memory: ${REDIS_MEMORY_LIMIT}
+          securityContext:
+            capabilities: {}
+            privileged: false
+          terminationMessagePath: /dev/termination-log
+          volumeMounts:
+          - mountPath: /var/lib/redis/data
+            name: '${DATABASE_SERVICE_NAME}-${DEPL_ID}-data'
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        volumes:
+        - name: '${DATABASE_SERVICE_NAME}-${DEPL_ID}-data'
+          persistentVolumeClaim:
+            claimName: '${DATABASE_SERVICE_NAME}-${DEPL_ID}'
+    triggers:
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - redis
+        from:
+          kind: ImageStreamTag
+          name: redis:${REDIS_VERSION}
+          namespace: ${NAMESPACE}
+        lastTriggeredImage: ""
+      type: ImageChange
+    - type: ConfigChange
+  status: {}
+parameters:
+#--- Global -------------------------------------
+- description: >-
+    Unique app deployment identifyer. You can specify one or let the system
+    generate one automatically for you.
+  displayName: (Optional) Deployment ID
+  from: '[a-z0-9]{5}'
+  generate: expression
+  name: DEPL_ID
+  required: true
+
+#--- EtherCalc ----------------------------------
+- description: git repository containing frontend source code
+  name: GIT_REPO
+  required: true
+  value: https://github.com/audreyt/ethercalc/
+- description: git branch to use to fetch frontend source code
+  name: GIT_REPO_REF
+  required: true
+  value: master
+
+- description: Maximum amount of memory the EtherCalc container can use.
+  displayName: Memory Limit
+  name: ETHERCALC_MEMORY_LIMIT
+  required: true
+  value: '512Mi'
+- description: Internal mirror for NPM
+  name: NPM_MIRROR
+  required: false
+- description: Verify NPM Mirror TLS Certificate
+  name: NPM_CONFIG_STRICT_SSL
+  required: true
+  value: 'true'
+- description: Internal mirror for NPM
+  name: SASS_BINARY_SITE
+  required: false
+
+#--- Redis --------------------------------------
+- description: Maximum amount of memory the Redis container can use.
+  displayName: Memory Limit
+  name: REDIS_MEMORY_LIMIT
+  required: true
+  value: '512Mi'
+- description: The OpenShift Namespace where the ImageStream resides.
+  displayName: Namespace
+  name: NAMESPACE
+  value: openshift
+- description: The name of the OpenShift Service exposed for the database.
+  displayName: Database Service Name
+  name: DATABASE_SERVICE_NAME
+  required: true
+  value: redis
+- description: Password for the Redis connection user.
+  displayName: Redis Connection Password
+  from: '[a-zA-Z0-9]{16}'
+  generate: expression
+  name: REDIS_PASSWORD
+  required: true
+- description: Volume space available for Redis data, e.g. 512Mi, 2Gi.
+  displayName: Volume Capacity
+  name: REDIS_VOLUME_CAPACITY
+  required: true
+  value: 1Gi
+- description: Version of Redis image to be used (3.2 or latest).
+  displayName: Version of Redis Image
+  name: REDIS_VERSION
+  required: true
+  value: "3.2"
