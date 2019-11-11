@@ -2,9 +2,25 @@ apiVersion: v1
 kind: Template
 labels:
   template: ethercalc
-  template-name: ethercalc-w-build
+  template-name: ethercalc-wo-build
   depl_id: "${DEPL_ID}"
 message: |-
+  The following service(s) have been created in your project:
+    - an EtherCalc pod with a route exposing the application outside of the OpenShift Cluster
+    - a ${DATABASE_SERVICE_NAME} backend to store data
+        Connection URL: redis://${DATABASE_SERVICE_NAME}:6379/ (not exposed outside the cluster)
+             Password: ${REDIS_PASSWORD}
+
+  NOTES:
+    - The Redis backend is not resilient nor backed up. Use at your own risks or implement your own backup / HA solution.
+
+  For more information about using this template, including OpenShift considerations, see https://github.com/societe-generale/cloud-innovation-platform.git.
+metadata:
+  labels:
+    template: ethercalc
+    template-name: ethercalc-wo-build
+  annotations:
+    description: |-
       EtherCalc is a web spreadsheet.
 
       Your data is saved on the web, and people can edit the same document at the same time. Everybody's changes are instantly reflected on all screens.
@@ -12,12 +28,10 @@ message: |-
 
       Data are stored in Redis in-memory data structure store, with persistent storage.
 
-metadata:
-  labels:
-    template: ethercalc
-    template-name: ethercalc-w-build
-  annotations:
-    description: |-
+    iconClass: icon-redis
+    openshift.io/display-name: EtherCalc
+    openshift.io/documentation-url: https://ethercalc.net/
+    openshift.io/long-description: |-
       EtherCalc is a web spreadsheet.
 
       Your data is saved on the web, and people can edit the same document at the same time. Everybody's changes are instantly reflected on all screens.
@@ -32,77 +46,18 @@ metadata:
 
       NOTES:
         - This template is provided 'as-is', you take full responsibilities.
-        - This template will build a custom container image from source code repo defined by GIT_REPO and GIT_REPO_REF template parameters.
-          - Use the 'ethercalc' template if you want to use the official ethercalc image pulled from Docker Hub.
+        - This template uses the official ethercalc image pulled from Docker Hub.
+          - Use the 'ethercalc-w-build' if you want to build from from source code repo defined by GIT_REPO and GIT_REPO_REF template parameters.
         - You must have persistent volumes available in your cluster to use this template.
         - The Redis backend is not resilient nor backed up. Implement your own backup / HA solution.
 
-    iconClass: icon-redis
-    openshift.io/display-name: EtherCalc + Redis
-    openshift.io/documentation-url: https://ethercalc.net/
-    openshift.io/long-description: This template provides an EtherCalc web spreadsheet backed by a standalone Redis server.
-      The data are stored on persistent storage.
     openshift.io/provider-display-name: Societe Generale, Cloud Innovation Platform team
     openshift.io/support-url: https://github.com/societe-generale/cloud-innovation-platform.git
-    tags: spreadsheet,redis,cip,collaboration,filesharing
-  name: ethercalc-w-build
+    tags: spreadsheet,redis,cip
+  name: ethercalc-wo-build
 objects:
 
 #--- EtherCalc ----------------------------------
-- apiVersion: v1
-  kind: ImageStream
-  metadata:
-    labels:
-      app: ethercalc-${DEPL_ID}
-    name: ethercalc-${DEPL_ID}
-  spec:
-    lookupPolicy:
-      local: false
-
-- apiVersion: v1
-  kind: BuildConfig
-  metadata:
-    labels:
-      app: 'ethercalc-${DEPL_ID}'
-      name: 'ethercalc-${DEPL_ID}'
-    name: ethercalc-${DEPL_ID}
-  spec:
-    nodeSelector: null
-    output:
-      to:
-        kind: ImageStreamTag
-        name: ethercalc-${DEPL_ID}:latest
-    postCommit: {}
-    resources: {}
-    runPolicy: Serial
-    source:
-      type: "Git"
-      git:
-        uri: ${GIT_REPO}
-        ref: ${GIT_REPO_REF}
-    strategy:
-      dockerStrategy:
-        env:
-          - name: "NPM_CONFIG_STRICT_SSL"
-            value: "${NPM_CONFIG_STRICT_SSL}"
-          - name: "NPM_MIRROR"
-            value: "${NPM_MIRROR}"
-          - name: "SASS_BINARY_SITE"
-            value: "${SASS_BINARY_SITE}"
-        dockerfilePath: .openshift/Dockerfile
-        from:
-          kind: DockerImage
-          name: 'docker-registry.default.svc:5000/openshift/nodejs:10'
-
-      type: Docker
-    triggers:
-    - type: ConfigChange
-    - type: ImageChange
-      imageChange:
-        from:
-          kind: "ImageStreamTag"
-          name: 'docker-registry.default.svc:5000/openshift/nodejs:10'
-
 - apiVersion: v1
   kind: Service
   metadata:
@@ -171,7 +126,7 @@ objects:
               secretKeyRef:
                 key: database-password
                 name: ${DATABASE_SERVICE_NAME}-${DEPL_ID}
-          image: ' '
+          image: '${ETHERCALC_IMAGE}'
           imagePullPolicy: IfNotPresent
           livenessProbe:
             initialDelaySeconds: 30
@@ -201,15 +156,6 @@ objects:
         dnsPolicy: ClusterFirst
         restartPolicy: Always
     triggers:
-    - imageChangeParams:
-        automatic: true
-        containerNames:
-        - ethercalc
-        from:
-          kind: ImageStreamTag
-          name: ethercalc-${DEPL_ID}:latest
-        lastTriggeredImage: ""
-      type: ImageChange
     - type: ConfigChange
 
 #--- Redis --------------------------------------
@@ -345,30 +291,16 @@ parameters:
   required: true
 
 #--- EtherCalc ----------------------------------
-- description: git repository containing frontend source code
-  name: GIT_REPO
+- description: Full registry image path to pull the image from, for example "docker.io/myuser/ethercalc:latest".
+  displayName: EtherCalc image registry path
+  name: ETHERCALC_IMAGE
   required: true
-  value: https://github.com/audreyt/ethercalc/
-- description: git branch to use to fetch frontend source code
-  name: GIT_REPO_REF
-  required: true
-  value: master
-
+  value: docker.io/audreyt/ethercalc:latest
 - description: Maximum amount of memory the EtherCalc container can use.
   displayName: Memory Limit
   name: ETHERCALC_MEMORY_LIMIT
   required: true
   value: '512Mi'
-- description: Internal mirror for NPM
-  name: NPM_MIRROR
-  required: false
-- description: Verify NPM Mirror TLS Certificate
-  name: NPM_CONFIG_STRICT_SSL
-  required: true
-  value: 'true'
-- description: Internal mirror for NPM
-  name: SASS_BINARY_SITE
-  required: false
 
 #--- Redis --------------------------------------
 - description: Maximum amount of memory the Redis container can use.
